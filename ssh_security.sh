@@ -17,6 +17,7 @@ OK="${G}✔${NC}"
 ERR="${R}✘${NC}"
 INFO="${C}→${NC}"
 WARN="${Y}!${NC}"
+LOG_FILE="/var/log/ssh-hardening.log"
 
 line() { echo -e "${D}────────────────────────────────────────────────────────────${NC}"; }
 
@@ -35,16 +36,32 @@ banner() {
   echo ""
 }
 
-step() {
-  echo ""
-  echo -e "${W}  ▸ $1${NC}"
-  line
+step()  { echo ""; echo -e "${W}  ▸ $1${NC}"; line; }
+ok()    { echo -e "  ${OK}  $1"; }
+err()   { echo -e "  ${ERR}  ${R}$1${NC}"; }
+info()  { echo -e "  ${INFO}  $1"; }
+warn()  { echo -e "  ${WARN}  ${Y}$1${NC}"; }
+
+# Запускает команду и показывает её вывод в стиле лога
+run() {
+  local label="$1"; shift
+  echo -e "  ${D}$ $*${NC}"
+  "$@" 2>&1 | while IFS= read -r line_out; do
+    echo -e "  ${D}│${NC}  $line_out"
+    echo "[$(date '+%H:%M:%S')] $line_out" >> "$LOG_FILE"
+  done
+  local exit_code="${PIPESTATUS[0]}"
+  if [[ $exit_code -eq 0 ]]; then
+    ok "$label"
+  else
+    err "$label завершился с ошибкой (код $exit_code)"
+    return $exit_code
+  fi
 }
 
-ok()   { echo -e "  ${OK}  $1"; }
-err()  { echo -e "  ${ERR}  ${R}$1${NC}"; }
-info() { echo -e "  ${INFO}  $1"; }
-warn() { echo -e "  ${WARN}  ${Y}$1${NC}"; }
+# ─── Init log ─────────────────────────────────────────────────────────────────
+mkdir -p "$(dirname "$LOG_FILE")"
+echo "=== SSH Hardening started at $(date) ===" > "$LOG_FILE"
 
 # ─── Parse args ───────────────────────────────────────────────────────────────
 SSH_PORT=22
@@ -142,8 +159,10 @@ apply() {
   else
     echo "${key} ${value}" >> "$SSHD_CONFIG"
   fi
+  echo -e "  ${D}│  ${key} → ${value}${NC}"
 }
 
+echo -e "  ${D}$ применяю параметры sshd_config${NC}"
 apply Port                              "$SSH_PORT"
 apply Protocol                          2
 apply PermitRootLogin                   no
@@ -171,9 +190,8 @@ fi
 # ─── Step 3: fail2ban ─────────────────────────────────────────────────────────
 step "Шаг 3 из 4 — fail2ban"
 
-info "Устанавливаю пакеты..."
-apt-get update -qq
-apt-get install -y fail2ban > /dev/null
+run "apt обновлён"              apt-get update
+run "fail2ban установлен"       apt-get install -y fail2ban
 
 cat > /etc/fail2ban/jail.d/sshd.local <<EOF
 [sshd]
@@ -184,27 +202,28 @@ findtime = 600
 bantime  = 3600
 backend  = systemd
 EOF
+ok "Конфиг jail записан"
 
-systemctl enable --now fail2ban > /dev/null
-systemctl restart fail2ban
-ok "fail2ban запущен"
+run "fail2ban включён"     systemctl enable fail2ban
+run "fail2ban перезапущен" systemctl restart fail2ban
 info "Правило: 5 попыток за 10 мин → бан на 1 час"
 
 # ─── Step 4: UFW ──────────────────────────────────────────────────────────────
 step "Шаг 4 из 4 — Firewall (UFW)"
 
-command -v ufw &>/dev/null || apt-get install -y ufw > /dev/null
-ufw allow "$SSH_PORT"/tcp comment "SSH" > /dev/null
-ufw --force enable > /dev/null
-ufw reload > /dev/null
-ok "Порт ${SSH_PORT}/tcp открыт"
-info "Все остальные входящие — закрыты"
+command -v ufw &>/dev/null || run "ufw установлен" apt-get install -y ufw
+
+run "Правило SSH добавлено"  ufw allow "$SSH_PORT"/tcp
+run "UFW включён"            ufw --force enable
+run "UFW перезагружен"       ufw reload
 
 # ─── Restart SSH ──────────────────────────────────────────────────────────────
-systemctl restart sshd
+echo ""
+run "SSH перезапущен" systemctl restart ssh
 
 # ─── Done ─────────────────────────────────────────────────────────────────────
 SERVER_IP=$(hostname -I | awk '{print $1}')
+echo "=== Done at $(date) ===" >> "$LOG_FILE"
 
 echo ""
 echo ""
@@ -216,6 +235,7 @@ echo -e "  ${D}Пользователь   ${NC}${W}${TARGET_USER}${NC}"
 echo -e "  ${D}SSH-порт       ${NC}${W}${SSH_PORT}${NC}"
 echo -e "  ${D}Пароль         ${NC}${R}отключён${NC}${D} — только ключ${NC}"
 echo -e "  ${D}IP-адрес       ${NC}${W}${SERVER_IP}${NC}"
+echo -e "  ${D}Лог            ${NC}${W}${LOG_FILE}${NC}"
 echo ""
 line
 echo ""
