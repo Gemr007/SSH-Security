@@ -84,12 +84,20 @@ fi
 banner
 
 # ─── Ask for username ─────────────────────────────────────────────────────────
-if [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; then
+while [[ -z "$TARGET_USER" || "$TARGET_USER" == "root" ]]; do
   echo -e "  ${W}Для какого пользователя настраиваем доступ?${NC}"
   echo -e "  ${D}(не root — будет создан автоматически, если не существует)${NC}"
   echo ""
   read -rp "  Имя пользователя: " TARGET_USER
-fi
+  if [[ -z "$TARGET_USER" ]]; then
+    err "Имя не может быть пустым"
+    echo ""
+  elif [[ "$TARGET_USER" == "root" ]]; then
+    err "Нельзя использовать root"
+    TARGET_USER=""
+    echo ""
+  fi
+done
 
 # ─── Create user if doesn't exist ────────────────────────────────────────────
 if ! id "$TARGET_USER" &>/dev/null; then
